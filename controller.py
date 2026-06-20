@@ -23,26 +23,42 @@ class NMPCController:
         self.X = self.opti.variable(6, self.N + 1)
         self.U = self.opti.variable(3, self.N)
         
-    def solve(self, q_curr, dq_curr, target_pos):
+    def solve(self, q_curr, dq_curr, target_pos, obs_pos):
         # Reset and clear previous constraints
         self.opti = ca.Opti() 
         X = self.opti.variable(6, self.N + 1)
         U = self.opti.variable(3, self.N)
         
+        safe_radius_sq = 0.1**2
         cost = 0
+        
+        # --- 1. THE RUNNING COST & CONSTRAINTS (The Journey) ---
         for k in range(self.N):
-            # Cost: Tracking error + control effort
             ee_pos = self.kin.forward_kinematics_sym(X[:3, k])
-            cost += ca.sumsqr(ee_pos - target_pos) * 100
-            cost += ca.sumsqr(U[:, k]) * 0.5
+            
+            # Massively reduced position weight: allow the arm to swing wide!
+            cost += ca.sumsqr(ee_pos - target_pos) * 5.0 
+            cost += ca.sumsqr(U[:, k]) * 0.1
+
+            # Hard obstacle constraint (No slack variable)
+            # ee_dist_sq = (ee_pos[0] - obs_pos[0])**2 + (ee_pos[1] - obs_pos[1])**2
+            # self.opti.subject_to(ee_dist_sq >= safe_radius_sq)
+            
+            # Dynamics
+            x_next = self.f_dynamics(X[:3, k], X[3:, k], U[:, k])
+            self.opti.subject_to(X[:, k+1] == ca.vertcat(x_next[0], x_next[1]))
+            
+        # --- 2. THE TERMINAL COST (The Strategic Goal) ---
+        # Calculate exactly where the arm is at the final step of the horizon
+        ee_final_pos = self.kin.forward_kinematics_sym(X[:3, self.N])
+        
+        # Add a massive reward ONLY for reaching the target at the very end
+        cost += ca.sumsqr(ee_final_pos - target_pos) * 1000.0 
             
         self.opti.minimize(cost)
         
-        # Constraints
+        # Initial condition constraint
         self.opti.subject_to(X[:, 0] == ca.vertcat(q_curr, dq_curr))
-        for k in range(self.N):
-            x_next = self.f_dynamics(X[:3, k], X[3:, k], U[:, k])
-            self.opti.subject_to(X[:, k+1] == ca.vertcat(x_next[0], x_next[1]))
             
         # Solver setup
         opts = {'ipopt.print_level': 0, 'print_time': 0}

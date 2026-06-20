@@ -16,6 +16,8 @@ def main():
 
     ee_site_id = model.site('end_effector').id
     target_body_id = model.body('target').id
+    obs_body_id = model.body('obstacle').id
+
     controller = NMPCController(dt=0.02, horizon=20)
 
     tolerance = 0.02  # 1 cm tolerance
@@ -27,15 +29,12 @@ def main():
     with mujoco.viewer.launch_passive(model, data) as viewer:
             while viewer.is_running():
                 # Step the physics
-                ee_pos = data.site_xpos[ee_site_id]
-                # 1. Get joint angles from MuJoCo
-                q = data.qpos[:3].copy()
-                dq = data.qvel[:3].copy()
+                ee_pos = data.site_xpos[ee_site_id].copy()
+                q_init = data.qpos[:3].copy()
+                dq_init = data.qvel[:3].copy()
 
                 # Get actual End-Effector and target id
-
-                q_init = q
-                dq_init = dq
+                obs_pos = data.xpos[obs_body_id].copy()
                 distance = np.linalg.norm(ee_pos - target_pos)
 
                 if distance < tolerance:
@@ -50,7 +49,7 @@ def main():
                 else:
 
                     try:
-                        optimal_acc = controller.solve(q_init, dq_init, target_pos)
+                        optimal_acc = controller.solve(q_init, dq_init, target_pos, obs_pos)
                         
                     except Exception as e:
                         print(f"Solver failed: {e}")
