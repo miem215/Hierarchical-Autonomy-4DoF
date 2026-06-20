@@ -1,0 +1,33 @@
+<mujoco model="3dof_arm">
+    <worldbody>
+        <light diffuse=".5 .5 .5" pos="0 0 3" dir="0 0 -1"/>
+        <body name="base" pos="0 0 0">
+            <geom type="cylinder" size="0.1 0.2" rgba="0 1 0 1"/>
+            <body name="link1" pos="0 0 0.2">
+                <joint name="joint1" type="hinge" axis="0 0 1"/>
+                <geom type="capsule" size="0.05 0.5" pos="0 0 0.5" rgba="1 0 0 1"/>
+                <body name="link2" pos="0 0 1">
+                    <joint name="joint2" type="hinge" axis="0 1 0"/>
+                    <geom type="capsule" size="0.05 0.5" pos="0 0 0.5" rgba="0 0 1 1"/>
+                    <body name="link3" pos="0 0 1">
+                        <joint name="joint3" type="hinge" axis="0 1 0"/>
+                        <geom type="capsule" size="0.05 0.5" pos="0 0 0.5" rgba="1 1 0 1"/>
+			<site name="end_effector" pos="0 0 1" type="sphere" size="0.05" rgba="0 0 0 1"/>
+                    </body>
+                </body>
+            </body>
+        </body>
+	<body name="barrier" pos="0.3 0 0.4">
+            <geom type="box" size="0.05 0.3 0.4" rgba="0.5 0.5 0.5 1"/>
+        </body>
+        <body name="target" pos="0.6 0.1 0.45">
+            <geom type="cylinder" size="0.03 0.05" rgba="0 1 0 1"/>
+        </body>
+    </worldbody>
+	
+    <actuator>
+        <motor joint="joint1" name="motor1" ctrlrange="-50 50"/>
+        <motor joint="joint2" name="motor2" ctrlrange="-50 50"/>
+        <motor joint="joint3" name="motor3" ctrlrange="-50 50"/>
+    </actuator>
+</mujoco>
