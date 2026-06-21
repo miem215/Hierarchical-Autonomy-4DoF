@@ -29,20 +29,26 @@ class NMPCController:
         X = self.opti.variable(6, self.N + 1)
         U = self.opti.variable(3, self.N)
         
-        safe_radius_sq = 0.1**2
+        safe_radius_sq = 0.05**2
         cost = 0
+        slack = self.opti.variable(self.N)
+        W_obs = 1000  # Massive penalty for clipping the obstacle
         
         # --- 1. THE RUNNING COST & CONSTRAINTS (The Journey) ---
         for k in range(self.N):
             ee_pos = self.kin.forward_kinematics_sym(X[:3, k])
             
             # Massively reduced position weight: allow the arm to swing wide!
-            cost += ca.sumsqr(ee_pos - target_pos) * 5.0 
+            cost += ca.sumsqr(ee_pos - target_pos) * 10.0 
             cost += ca.sumsqr(U[:, k]) * 0.1
 
+            cost += W_obs * slack[k]
+            cost += ca.sumsqr(X[3:, k]) * 0.25
+
             # Hard obstacle constraint (No slack variable)
-            # ee_dist_sq = (ee_pos[0] - obs_pos[0])**2 + (ee_pos[1] - obs_pos[1])**2
-            # self.opti.subject_to(ee_dist_sq >= safe_radius_sq)
+            ee_dist_sq = (ee_pos[0] - obs_pos[0])**2 + (ee_pos[1] - obs_pos[1])**2
+            self.opti.subject_to(ee_dist_sq + slack[k] >= safe_radius_sq)
+            self.opti.subject_to(slack[k] >= 0)
             
             # Dynamics
             x_next = self.f_dynamics(X[:3, k], X[3:, k], U[:, k])

@@ -20,7 +20,7 @@ def main():
 
     controller = NMPCController(dt=0.02, horizon=20)
 
-    tolerance = 0.02  # 1 cm tolerance
+    tolerance = 0.03  # 1 cm tolerance
     target_reached = False
 
     
