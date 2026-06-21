@@ -1,6 +1,6 @@
-# Custom 3-DOF NMPC & State Estimation in MuJoCo: A Physics-Informed Architecture
+# 3-DOF NMPC & State Estimation in MuJoCo
 
-> **Note on Implementation:** This architecture is built entirely from scratch. It relies purely on NumPy for matrix operations and CasADi for symbolic optimization, interfacing directly with the MuJoCo physics engine. Absolutely no third-party RL environments or black-box control wrappers were utilized.
+> **Note on Implementation:** The project relies on NumPy for matrix operations and CasADi for symbolic optimization, interfacing directly with the MuJoCo physics engine. 
 
 ## Executive Summary
 This repository demonstrates a fully custom, white-box robotics pipeline capable of controlling a 3-DOF manipulator to navigate spatial constraints and reach precise 3D Cartesian coordinates. The system bridges non-convex mathematical optimization with physical simulation through a robust discrete state machine.
