@@ -39,7 +39,7 @@ class NMPCController:
             ee_pos = self.kin.forward_kinematics_sym(X[:3, k])
             
             # Massively reduced position weight: allow the arm to swing wide!
-            cost += ca.sumsqr(ee_pos - target_pos) * 10.0 
+            cost += ca.sumsqr(ee_pos - target_pos) * 10.0
             cost += ca.sumsqr(U[:, k]) * 0.1
 
             cost += W_obs * slack[k]
