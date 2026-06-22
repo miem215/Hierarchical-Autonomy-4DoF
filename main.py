@@ -28,7 +28,7 @@ def main():
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
         while viewer.is_running():
-            # --- 1. SENSOR BUS (Hardware Reality) ---
+            # --- 1. SENSOR (Hardware Reality) ---
             raw_sensor_bus = np.array(data.sensordata)
             noisy_pos = raw_sensor_bus[0:3] + np.random.normal(0, 0.005, 3) 
             noisy_vel = raw_sensor_bus[3:6] + np.random.normal(0, 0.02, 3)
