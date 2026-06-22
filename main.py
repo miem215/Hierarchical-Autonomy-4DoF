@@ -1,89 +1,78 @@
-# test_controller.py
-from controller import NMPCController # assuming your class is in controller.py
+from controller import NMPCController
 import numpy as np
 import mujoco
 import mujoco.viewer
-
+from filter import UnscentedKalmanFilter
 
 def main():
-# 1. Setup
+    # 1. Setup
     model = mujoco.MjModel.from_xml_path('3DoFarm.xml')
     data = mujoco.MjData(model)
 
     mujoco.mj_resetDataKeyframe(model, data, 0)
-
     mujoco.mj_forward(model, data)
 
-    ee_site_id = model.site('end_effector').id
     target_body_id = model.body('target').id
     obs_body_id = model.body('obstacle').id
 
+    # MATCH THE TIMESTEPS
     controller = NMPCController(dt=0.02, horizon=20)
+    ukf = UnscentedKalmanFilter(dt=0.02) 
 
-    tolerance = 0.03  # 1 cm tolerance
+    tolerance = 0.03  
     target_reached = False
-
-    
     target_pos = data.xpos[target_body_id] + np.array([0.0, 0.0, 0.07])
+    
+    # Initialize previous control input for the UKF prediction step
+    u_prev = np.zeros(3)
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
-            while viewer.is_running():
-                # Step the physics
-                ee_pos = data.site_xpos[ee_site_id].copy()
+        while viewer.is_running():
+            # --- 1. SENSOR BUS (Hardware Reality) ---
+            raw_sensor_bus = np.array(data.sensordata)
+            noisy_pos = raw_sensor_bus[0:3] + np.random.normal(0, 0.005, 3) 
+            noisy_vel = raw_sensor_bus[3:6] + np.random.normal(0, 0.02, 3)
+            
+            # Combine into the 6x1 measurement vector Z
+            z_meas = np.concatenate((noisy_pos, noisy_vel))
 
-                raw_sensor_bus = np.array(data.sensordata)
+            # --- 2. STATE ESTIMATION (The UKF Pipeline) ---
+            # Phase A: Predict where we are based on the LAST known motor command
+            ukf.predict(u_prev)
+            
+            # Phase B: Correct the prediction using the CURRENT noisy sensors
+            q_est, dq_est = ukf.update(z_meas)
 
-                # 2. Parse the encoders (Indices 0,1,2 are pos; 3,4,5 are vel based on XML order)
-                enc_pos = raw_sensor_bus[0:3]
-                enc_vel = raw_sensor_bus[3:6]
+            # --- 3. KINEMATICS & CONTROL (Using Clean Estimates) ---
+            # Borrow the kinematics engine already built into your controller
+            ee_pos_est = controller.kin.forward_kinematics_sym(q_est)
 
-                # 3. Define your explicit Covariance parameters (The "R" matrix values)
-                # For example: 0.005 radians noise on position, 0.02 rad/s on velocity
-                sigma_pos = 0.005  
-                sigma_vel = 0.02   
+            obs_pos = data.xpos[obs_body_id].copy()
+            distance = np.linalg.norm(ee_pos_est - target_pos)
 
-                # 4. Inject synthetic Gaussian noise
-                noisy_pos = enc_pos + np.random.normal(0, sigma_pos, 3)
-                noisy_vel = enc_vel + np.random.normal(0, sigma_vel, 3)
-
-                # Get actual End-Effector and target id
-                obs_pos = data.xpos[obs_body_id].copy()
-                distance = np.linalg.norm(ee_pos - target_pos)
-
-                if distance < tolerance:
-                    if not target_reached:
-                        print(f"Target Reached! Error: {distance*1000:.1f} mm. Switching to Hold Mode.")
-                        target_reached = True
-                
-                # HOLD MODE: Command exactly zero acceleration
-                # Inverse dynamics will automatically hold the arm against gravity
+            if distance < tolerance:
+                if not target_reached:
+                    print(f"Target Reached! Error: {distance*1000:.1f} mm. Switching to Hold Mode.")
+                    target_reached = True
+                optimal_acc = np.zeros(3)
+            else:
+                try:
+                    # CRITICAL FIX: Feed the CasADi solver the clean estimate, NOT the noise
+                    optimal_acc = controller.solve(q_est, dq_est, target_pos, obs_pos)
+                except Exception as e:
+                    print(f"Solver failed: {e}")
                     optimal_acc = np.zeros(3)
 
-                else:
+            # --- 4. SYSTEM UPDATE ---
+            # Save the calculated acceleration to feed the UKF predict step on the next loop
+            u_prev = optimal_acc.copy()
 
-                    try:
-                        optimal_acc = controller.solve(noisy_pos, noisy_vel, target_pos, obs_pos)
-                        
-                    except Exception as e:
-                        print(f"Solver failed: {e}")
-                        optimal_acc = np.zeros(3)
-
-                # 2. Tell MuJoCo what acceleration you WANT to achieve
-                data.qacc[:3] = optimal_acc
-
-                # 3. Run Inverse Dynamics (This updates data.qfrc_inverse)
-                mujoco.mj_inverse(model, data)
-
-                # 4. Extract the calculated required torque
-                required_torque = data.qfrc_inverse[:3].copy()
-
-                # 5. Send the torque to the actual actuators
-                data.ctrl[:3] = required_torque
-
-                # 6. Step the physics forward
-                mujoco.mj_step(model, data)
-                viewer.sync()
-
+            data.qacc[:3] = optimal_acc
+            mujoco.mj_inverse(model, data)
+            data.ctrl[:3] = data.qfrc_inverse[:3].copy()
+            
+            mujoco.mj_step(model, data)
+            viewer.sync()
 
 if __name__ == '__main__':
     main()
