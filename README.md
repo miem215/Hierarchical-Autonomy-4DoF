@@ -4,6 +4,15 @@ This project simulates a 4 Degree-of-Freedom (4-DOF) robotic arm in the MuJoCo p
 
 The system is designed to track a target coordinate while proactively dodging a dynamic, swinging obstacle, demonstrating advanced optimal control and state estimation in a simulated hardware environment.
 
+## Motivation & Project Evolution
+
+This project evolved through several high-level modifications to bridge the gap between a basic robotic simulation and a realistic, hardware-ready control architecture:
+
+* **Kinematic Upgrade (3-DOF to 4-DOF):** The manipulator was upgraded from 3 to 4 degrees of freedom. This added kinematic redundancy is crucial; it allows the arm to maintain a positional lock on the target while simultaneously contorting its internal posture to dodge intermediate obstacles.
+* **Dynamic Environments:** The project transitioned from static spatial waypoints to a highly dynamic environment by introducing a continuously swinging obstacle. This necessitated the shift to real-time Nonlinear Model Predictive Control (NMPC) to proactively predict and recalculate safe trajectories on the fly.
+* **Sim-to-Real State Estimation:** To simulate physical hardware limitations, pristine simulation data was intentionally corrupted with Gaussian noise. An Unscented Kalman Filter (UKF) was implemented from scratch to clean this sensor data before feeding it to the NMPC, mimicking the exact pipeline required for real-world hardware encoders.
+* **Whole-Body Collision Awareness:** The collision constraints evolved from simple "end-effector-only" checking to a planar whole-body force field. Virtual nodes are now mathematically calculated along the arm's links to prevent intermediate joints (like the elbow or wrist) from clipping the obstacle.
+
 ## Design Justification & Computational Profiling
 
 To ensure this controller is viable for physical hardware deployment, specific algorithmic trade-offs were made to prioritize **real-time execution (50Hz)**:
