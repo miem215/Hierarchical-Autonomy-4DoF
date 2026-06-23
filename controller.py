@@ -21,7 +21,7 @@ class NMPCController:
         
         # FIX 1: Increase safe radius! 
         # (0.05 EE radius + 0.04 Obstacle radius + 0.06 safety buffer)
-        safe_radius_sq = 0.15**2
+        safe_radius_sq = 0.3**2
         
         cost = 0
         slack = self.opti.variable(self.N)

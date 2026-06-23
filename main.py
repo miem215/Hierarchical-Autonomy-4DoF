@@ -14,6 +14,7 @@ def main():
 
     target_body_id = model.body('target').id
     obs_body_id = model.body('obstacle').id
+    obs_mocap_id = model.body('obstacle').mocapid[0]
 
     # MATCH THE TIMESTEPS
     controller = NMPCController(dt=0.02, horizon=20)
@@ -22,6 +23,10 @@ def main():
     tolerance = 0.03  
     target_reached = False
     target_pos = data.xpos[target_body_id] + np.array([0.0, 0.0, 0.07])
+
+    
+    swing_speed = 8.0  # How fast it moves
+    swing_distance = 0.25 #
     
     # Initialize previous control input for the UKF prediction step
     u_prev = np.zeros(4)
@@ -47,7 +52,10 @@ def main():
             # Borrow the kinematics engine already built into your controller
             ee_pos_est = controller.kin.forward_kinematics_sym(q_est)
 
-            obs_pos = data.xpos[obs_body_id].copy()
+            sim_time = data.time
+            data.mocap_pos[obs_mocap_id][1] = np.sin(sim_time * swing_speed) * swing_distance
+
+            obs_pos = data.mocap_pos[obs_mocap_id].copy()
             distance = np.linalg.norm(ee_pos_est - target_pos)
 
             try:
