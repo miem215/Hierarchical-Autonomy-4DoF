@@ -66,7 +66,7 @@ $$
 
 ### 2. NMPC Cost Function
 
-The CasADi solver minimizes a highly tuned cost function $J$ across the prediction horizon. The cost function balances aggressive target tracking with energy efficiency and postural stability:
+The CasADi solver minimizes a highly tuned cost function $J$ across the prediction horizon. The cost function balances target tracking, obstacle avoidance and energy efficiency and postural stability:
 
 $$
 J = \sum_{k=0}^{N-1} \left( J_{track, k} + J_{effort, k} + J_{posture, k} + J_{slack, k} \right) + J_{terminal}
