@@ -11,7 +11,8 @@ This project evolved through several modifications to arrive current control arc
 * **Kinematic Upgrade (3-DOF to 4-DOF):** The manipulator was upgraded from 3 to 4 degrees of freedom. This added kinematic redundancy allows the arm to maintain a positional lock on the target while simultaneously contorting its internal posture to dodge obstacles.
 * **Dynamic Environments:** The project transitioned from using stationary obstacle to dynamic obstacle. This necessitated the shift to real-time Nonlinear Model Predictive Control (NMPC) to proactively predict and recalculate safe trajectories on the fly.
 
-<img width="589" height="501" alt="4DoF_arm" src="https://github.com/user-attachments/assets/bb05b217-597d-4e91-8c6b-935fcfb1d968" />
+<img width="751" height="626" alt="Animation" src="https://github.com/user-attachments/assets/c48e2b02-8a60-46db-8d11-46ad8244e542" />
+
 
 ## Why UKF?
 
@@ -32,11 +33,6 @@ $$
 
 Because both models are linear, a standard Linear Kalman Filter (KF) would technically suffice. However, the UKF was explicitly chosen as an **architectural future-proofing** measure. To simulate real-world lab conditions in future iterations, Cartesian camera data $(x, y, z)$ will be fused with the encoder data. 
 
-UKF performace on the joint velocity: 
-
-<img width="3000" height="1500" alt="ukf_performance" src="https://github.com/user-attachments/assets/86baae36-f166-4b41-bcac-e079fb32501d" />
-
-
 **Future Non-Linear Measurement Model (Camera Fusion):**
 
 $$
@@ -44,6 +40,10 @@ z_{cam} = \text{FK}(q_k) + v_{cam}
 $$
 
 Because the Forward Kinematics ($\text{FK}$) relies on highly non-linear trigonometric transformations, a Linear KF will fail. The UKF's deterministic sigma points are already in place to naturally handle this future non-linear measurement update without requiring a complete estimator rewrite or complex Jacobian derivations.
+
+UKF performace on the joint velocity in current setup: 
+
+<img width="3000" height="1500" alt="ukf_performance" src="https://github.com/user-attachments/assets/86baae36-f166-4b41-bcac-e079fb32501d" />
 
 
 ## Design Justification & Computational Profiling
