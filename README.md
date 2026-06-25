@@ -86,7 +86,7 @@ $$
 x_{k+1} = \begin{bmatrix} q_{k+1} \\ \dot{q}_{k+1} \end{bmatrix} = \begin{bmatrix} q_k + \dot{q}_k \Delta t \\ \dot{q}_k + u_k \Delta t \end{bmatrix}
 $$
 
-### 3. Cost Function and Tunning
+### 3. Cost Function
 
 The CasADi solver minimizes a highly tuned cost function $J$ across the prediction horizon. The cost function balances target tracking, obstacle avoidance and energy efficiency and postural stability:
 
