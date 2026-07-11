@@ -1,32 +1,87 @@
 ## Project Overview
 
-This project simulates a 4 Degree-of-Freedom (4-DOF) robotic arm in the MuJoCo physics engine. It utilizes a custom-built **Nonlinear Model Predictive Controller (NMPC)** powered by CasADi to calculate optimal trajectories, coupled with an **Unscented Kalman Filter (UKF)** to handle noisy real-world sensor data.
+This project simulates a 4 Degree-of-Freedom (4-DOF) robotic arm in the MuJoCo physics engine. It implements a complete Hierarchical Autonomy Stack combining global sampling-based motion planning with real-time local optimal control and state estimation:  
 
-The system is designed to track a target coordinate while proactively dodging a dynamic, swinging obstacle, demonstrating advanced optimal control and state estimation in a simulated hardware environment.
+* High-Level Global Planner: A 3D Cartesian Rapidly-exploring Random Tree Star (RRT*) computes a collision-free geometric trajectory around macro-environmental boundaries.
+* Mid-Level Local Controller: A custom-built Nonlinear Model Predictive Controller (NMPC) powered by CasADi tracks time-indexed reference windows along the RRT* path while proactively dodging highly dynamic, swinging obstacles.  
+* Low-Level Estimator: An Unscented Kalman Filter (UKF) filters out injected Gaussian sensor noise to provide clean state estimates to the optimization loop in real time.  The system demonstrates advanced whole-body optimal control, randomized motion planning, and stochastic state estimation operating together in a high-fidelity simulated hardware environment.
 
 ## File Structure
+* main.py - The core orchestrator loop. It updates MuJoCo physics, triggers the global RRT* planner, injects Gaussian sensor noise, runs the UKF pipeline, and closes the loop at 50Hz by feeding time-indexed path windows into the NMPC.  
+* planner.py - Implements the high-level 3D Cartesian RRT* planner and a dynamic waypoint interpolator/slicer to generate smooth preview reference paths for the receding horizon loop.
+* controller.py - Contains the CasADi optimization logic. Defines explicit state-space dynamics, cost profiles tracking the time-indexed path slice, and non-linear, whole-body collision avoidance manifolds.  
+* filter.py - The state estimation module. Uses deterministic sigma points via an Unscented Kalman Filter (UKF) to filter noisy joint positions and velocities.  
+* Kinematic.py - The kinematic engine handling symbolic forward kinematics used by both the NMPC optimizer and the main loop framework.  3DoFarm.xml - The MuJoCo environment specification defining structural links, active target positions, and dynamic obstacle properties. 
 
-* main.py - The core simulation loop. Initializes MuJoCo, injects Gaussian noise into the sensor bus, and ties the UKF and NMPC pipelines together.
-
-* controller.py - Contains the CasADi optimization logic. Defines the explicit dynamics, cost functions, and non-linear collision constraints over a finite prediction horizon.
-
-* filter.py - Contains the Unscented Kalman Filter (UKF) implementation. Uses deterministic sigma points to filter noisy joint positions and velocities.
-
-* Kinematic.py - The kinematic engine handling symbolic forward kinematics for the CasADi solver.
-
-* 3DoFarm.xml - The MuJoCo environment specification, defining the physical attributes of the arm, the dynamic obstacle, and the target.
-
-## Motivation & Project Evolution
+# 1. Motivation & Project Evolution
 
 This project evolved through several modifications to arrive current control architecture:
 
 * **Kinematic Upgrade (3-DOF to 4-DOF):** The manipulator was upgraded from 3 to 4 degrees of freedom. This added kinematic redundancy allows the arm to maintain a positional lock on the target while simultaneously contorting its internal posture to dodge obstacles.
 * **Dynamic Environments:** The project transitioned from using stationary obstacle to dynamic obstacle. This necessitated the shift to real-time Nonlinear Model Predictive Control (NMPC) to proactively predict and recalculate safe trajectories on the fly.
+* **Hierarchical Autonomy (RRT Integration):** Integrated a high-level 3D Cartesian RRT* planner above the NMPC. While the local NMPC excels at split-second dynamic dodging over short preview horizons, the global RRT* resolves long-range geometric decision-making, preventing the local optimizer from getting trapped in structural local minima.
 
 <img width="751" height="626" alt="Animation" src="https://github.com/user-attachments/assets/c48e2b02-8a60-46db-8d11-46ad8244e542" />
 
+# 2. Algorithmic Layers 
 
-## Why UKF?
+## 1. High-Level Planning: 3D Cartesian RRT*
+Before the control loop initiates, planner.py constructs a randomized geometric tree in the 3D workspace from the end-effector's initial position to the target.
+* Cost Minimization: Utilizing the RRT* variant, nearby nodes within a localized neighborhood search radius are re-parented and re-wired whenever a lower-cost path is discovered.
+* Waypoint Generation: The resulting sparse path nodes are interpolated using 1D cumulative distance matching to create a dense reference trajectory vector. At each timestep $t$, a window of $N+1$ steps is sliced and sent to the local controller as tracking targets:
+
+$$\text{Trajectory Window}_t = \begin{bmatrix} p_{ref, t} & p_{ref, t+1} & \dots & p_{ref, t+N} \end{bmatrix}^T$$
+
+
+## 2. Nonlinear Model Predictive Controller (NMPC)
+### Why NMPC
+
+While the complete optimization problem balances multiple operational objectives (such as control effort and postural alignment), the core optimization landscape is fundamentally dominated by a "tug-of-war" between two primary costs: Target Tracking and Obstacle Avoidance.
+
+Figure 1 visualizes this cost landscape mapped across the 2D Cartesian workspace of the end-effector. As demonstrated by the bifurcated topology, the addition of the obstacle avoidance penalty transforms the otherwise simple quadratic tracking problem into a highly non-convex optimization space.
+
+This geometric reality is the fundamental justification for utilizing a Nonlinear Model Predictive Controller (NMPC). Standard Linear MPC architectures rely on Quadratic Programming (QP) solvers that require a strictly convex feasible region. If a QP solver were presented with this landscape, it would become trapped in a local minimum against the obstacle's boundary and fail to find a solution. By deploying an NMPC, the system leverages CasADi's advanced IPOPT interior-point solver, which is natively capable of evaluating non-linear trigonometric kinematics and routing trajectories around non-convex constraint manifolds.
+
+To generate this geometric visualization, the simplified cost function $J$ is evaluated as:
+
+$$
+J = \sum_{k=0}^{N-1} \left( J_{track, k} + J_{slack, k} \right)
+$$
+
+* **Target Tracking:** $J_{track, k} = w_{track} \| p_{end_effecor} - p_{target} \|_2^2$
+* **Obstacle Slack Penalty:** $J_{slack, k} = W_{obs} \cdot s_k$
+
+### 2. System Dynamics
+
+The NMPC predicts the future states of the arm over a horizon $N$ using Explicit Euler integration. Let the state vector be $x = [q, \dot{q}]^T \in \mathbb{R}^8$ and the control input be joint accelerations $u = \ddot{q} \in \mathbb{R}^4$. The system dynamics are defined as:
+
+$$
+x_{k+1} = \begin{bmatrix} q_{k+1} \\ \dot{q}_{k+1} \end{bmatrix} = \begin{bmatrix} q_k + \dot{q}_k \Delta t \\ \dot{q}_k + u_k \Delta t \end{bmatrix}
+$$
+
+### 3. Cost Function
+
+The CasADi solver minimizes a highly tuned cost function $J$ across the prediction horizon. The cost function balances target tracking, obstacle avoidance and energy efficiency and postural stability:
+
+$$
+J = \sum_{k=0}^{N-1} \left( J_{track, k} + J_{effort, k} + J_{posture, k} + J_{slack, k} \right) + J_{terminal}
+$$
+
+Where the individual running costs are defined as:
+
+* **Target Tracking:** $J_{track, k} = w_{traking}\| \text{FK}(q_k) - p_{target} \|_2^2$
+* **Control & Velocity Effort:** $J_{effort, k} = 0.2 \| u_k \|_2^2 + 0.2 \| \dot{q}_k \|_2^2$
+* **Postural Alignment:** $J_{posture, k} = (q_k - q_{home})^T W_{posture} (q_k - q_{home})$
+* **Obstacle Slack Penalty:** $J_{slack, k} = W_{obs} \cdot s_k$
+
+  Note:
+  The velocity effort: The velocity penalty acts as an artificial damping system, it forces the arm to slow down gracefully as it approaches the target
+  The postual alignment: This penalty mathematically resolves the 4-DOF kinematic redundancy by projecting a secondary objective into the null-space. It prevents unpredictable, erratic joint contortions and keeps the arm away from kinematic singularities.
+  tracking running cost and terminal cost: Because the NMPC predicts a finite window into the future (e.g., 0.4 seconds), the solver is inherently "short-sighted." With only a running cost, if the solver realizes it cannot reach the exact target within that 0.4s window, it may settle for getting "close enough," leading to persistent steady-state error or aimless drifting.
+
+<img width="2245" height="2373" alt="optimization_landscape" src="https://github.com/user-attachments/assets/17f24016-833b-4487-85ba-f37dbf04749f" />
+
+## 3. Low-Level Estimation: Unscented Kalman Filter (UKF)
 
 * **Sensor Noise Injection:** Gaussian noise ($\mathcal{N}(0, R)$) is continuously injected into MuJoCo's pristine joint position and velocity sensor readings to simulate encoder inaccuracies.
 * **Why the UKF?** An Unscented Kalman Filter (UKF) was implemented to clean this noisy data before it reaches the NMPC. In the current architecture, the state vector is $x = [q, \dot{q}]^T$. Because we use a simple one-step Euler integration for the process model, and because the measurements are direct simulated encoder readings (mapping 1:1 with the states), the entire system is strictly linear:
@@ -57,56 +112,8 @@ UKF performace on the joint velocity in current setup:
 
 <img width="3000" height="1500" alt="ukf_performance" src="https://github.com/user-attachments/assets/86baae36-f166-4b41-bcac-e079fb32501d" />
 
-## Nonlinear Model Predictive Controller (NMPC)
-### 1. Why NMPC
 
-While the complete optimization problem balances multiple operational objectives (such as control effort and postural alignment), the core optimization landscape is fundamentally dominated by a "tug-of-war" between two primary costs: Target Tracking and Obstacle Avoidance.
-
-Figure 1 visualizes this cost landscape mapped across the 2D Cartesian workspace of the end-effector. As demonstrated by the bifurcated topology, the addition of the obstacle avoidance penalty transforms the otherwise simple quadratic tracking problem into a highly non-convex optimization space.
-
-This geometric reality is the fundamental justification for utilizing a Nonlinear Model Predictive Controller (NMPC). Standard Linear MPC architectures rely on Quadratic Programming (QP) solvers that require a strictly convex feasible region. If a QP solver were presented with this landscape, it would become trapped in a local minimum against the obstacle's boundary and fail to find a solution. By deploying an NMPC, the system leverages CasADi's advanced IPOPT interior-point solver, which is natively capable of evaluating non-linear trigonometric kinematics and routing trajectories around non-convex constraint manifolds.
-
-To generate this geometric visualization, the simplified cost function $J$ is evaluated as:
-
-$$
-J = \sum_{k=0}^{N-1} \left( J_{track, k} + J_{slack, k} \right)
-$$
-
-* **Target Tracking:** $J_{track, k} = w_{track} \| p_{end_effecor} - p_{target} \|_2^2$
-* **Obstacle Slack Penalty:** $J_{slack, k} = W_{obs} \cdot s_k$
-
-<img width="2245" height="2373" alt="optimization_landscape" src="https://github.com/user-attachments/assets/17f24016-833b-4487-85ba-f37dbf04749f" />
-
-
-### 2. System Dynamics
-
-The NMPC predicts the future states of the arm over a horizon $N$ using Explicit Euler integration. Let the state vector be $x = [q, \dot{q}]^T \in \mathbb{R}^8$ and the control input be joint accelerations $u = \ddot{q} \in \mathbb{R}^4$. The system dynamics are defined as:
-
-$$
-x_{k+1} = \begin{bmatrix} q_{k+1} \\ \dot{q}_{k+1} \end{bmatrix} = \begin{bmatrix} q_k + \dot{q}_k \Delta t \\ \dot{q}_k + u_k \Delta t \end{bmatrix}
-$$
-
-### 3. Cost Function
-
-The CasADi solver minimizes a highly tuned cost function $J$ across the prediction horizon. The cost function balances target tracking, obstacle avoidance and energy efficiency and postural stability:
-
-$$
-J = \sum_{k=0}^{N-1} \left( J_{track, k} + J_{effort, k} + J_{posture, k} + J_{slack, k} \right) + J_{terminal}
-$$
-
-Where the individual running costs are defined as:
-
-* **Target Tracking:** $J_{track, k} = w_{traking}\| \text{FK}(q_k) - p_{target} \|_2^2$
-* **Control & Velocity Effort:** $J_{effort, k} = 0.2 \| u_k \|_2^2 + 0.2 \| \dot{q}_k \|_2^2$
-* **Postural Alignment:** $J_{posture, k} = (q_k - q_{home})^T W_{posture} (q_k - q_{home})$
-* **Obstacle Slack Penalty:** $J_{slack, k} = W_{obs} \cdot s_k$
-
-  Note:
-  The velocity effort: The velocity penalty acts as an artificial damping system, it forces the arm to slow down gracefully as it approaches the target
-  The postual alignment: This penalty mathematically resolves the 4-DOF kinematic redundancy by projecting a secondary objective into the null-space. It prevents unpredictable, erratic joint contortions and keeps the arm away from kinematic singularities.
-  tracking running cost and terminal cost: Because the NMPC predicts a finite window into the future (e.g., 0.4 seconds), the solver is inherently "short-sighted." With only a running cost, if the solver realizes it cannot reach the exact target within that 0.4s window, it may settle for getting "close enough," leading to persistent steady-state error or aimless drifting.
-
-## Whole-Body Collision Avoidance (Virtual Nodes)
+# 3. Whole-Body Collision Avoidance (Virtual Nodes)
 
 To prevent the intermediate links from clipping through the dynamic obstacle, the arm calculates fast 2D planar kinematics (treating the obstacle as an infinite pillar along the Z-axis). For each joint/node, the radial distance $r$ in the X-Y plane is derived:
 
@@ -132,29 +139,11 @@ To ensure this controller is viable for physical hardware deployment, specific a
 * **Predictive Horizon ($N=20$):** At a timestep of $\Delta t = 0.02s$, a 20-step horizon yields a 0.4-second predictive window. This provides just enough spatial awareness for the IPOPT solver to dodge dynamic obstacles without causing computational bottlenecks.
 * **Solve Time Performance:** The CasADi IPOPT solver successfully completes the 20-step non-linear horizon in approximately 10-15 milliseconds on an average CPU, running comfortably within the 20ms allowance required for stable 50Hz control.
 
-## Current State & Features
+# 4. Algorithmic Performance Trade-offs
 
-Advanced State Estimation: Filters Gaussian noise from joint sensors before feeding states into the controller.
-
-Dynamic Postural Costs (NMPC): State-dependent cost weights. Distal joints stiffen when reaching from afar to act like a spear, and loosen dynamically as the end-effector enters the target zone.
-
-Dynamic Obstacle Avoidance: Environment features a moving dynamic obstacle. The NMPC recalculates on the fly to dodge it.
-
-Target Tracking & Hold: The arm aggressively pursues the target coordinate and switches to a stable hold/hover state upon breaching the tolerance threshold.
-
-## Known Issues
-
-Whole-Body vs. Tip Collision: Currently, the end-effector dodges the dynamic obstacle perfectly using a 2D planar force field constraint. However, the system struggles with strict Whole-Body Collision Avoidance. While intermediate virtual nodes have been drafted, the intermediate links can still occasionally clip the obstacle. The discrete virtual node approach requires further tuning to create a truly impenetrable force field along the 1-meter link lengths.
-
-## Future Roadmap
-
-Continuous Collision Avoidance: Replace the discrete "Virtual Node" point-mass constraints with true Line-Segment to Point distance formulas.
-
-Computer Vision Integration: Replace the raw MuJoCo mocap_pos data with a simulated RGB camera pipeline to estimate the obstacle's state dynamically.
-
-Dynamic Target Interception: Feed an estimated target velocity vector into the CasADi prediction horizon to intercept moving targets.
-
-Reinforcement Learning Benchmarking: Wrap the environment in a Gymnasium interface to benchmark this NMPC's performance against PPO/SAC deep learning agents.
-```bash
-python main.py
+To guarantee stable and safe real-time execution (50Hz control loop), specific design boundaries were maintained:  Explicit Euler Integration: Selected over higher-order numerical methods like RK4. 
+* Explicit Euler integration guarantees a strict sub-20ms execution overhead per optimization loop, maintaining deterministic execution intervals.  
+* Predictive Horizon Choice ($N=20, \Delta t = 0.02s$): Results in a 0.4-second predictive preview window. This offers sufficient spatial awareness to execute local reactive avoidance maneuvers without introducing computational bottlenecks into the loop.  
+* Solve-Time Profile: The CasADi solver completes the 20-step non-linear optimization problem within approximately 10-15 milliseconds on a single standard CPU thread, operating comfortably within the 20ms timing window required for stable execution. 
+ 
 ```
