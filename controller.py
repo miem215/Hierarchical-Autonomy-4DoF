@@ -96,7 +96,7 @@ class NMPCController:
         # --- 2. THE TERMINAL COST ---
         ee_final_pos = self.kin.forward_kinematics_sym(X[:4, self.N])
         ref_final_pos = target_trajectory[self.N, :]
-        cost += ca.sumsqr(ee_final_pos - ref_final_pos) * 1000.0 
+        cost += ca.sumsqr(ee_final_pos - ref_final_pos) * 10000.0 
             
         self.opti.minimize(cost)
         self.opti.subject_to(X[:, 0] == ca.vertcat(q_curr, dq_curr))
