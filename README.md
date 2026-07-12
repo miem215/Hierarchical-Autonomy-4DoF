@@ -7,8 +7,8 @@
   * [2. Nonlinear Model Predictive Controller (NMPC)](#2-nonlinear-model-predictive-controller-nmpc)
   * [3. Low-Level Estimation: Unscented Kalman Filter (UKF)](#3-low-level-estimation-unscented-kalman-filter-ukf)
 * [3. Whole-Body Collision Avoidance (Virtual Nodes)](#3-whole-body-collision-avoidance-virtual-nodes)
-* [4. Other design parameters](#other-design-parameters)
-* [5. Algorithmic Performance Trade-offs](#4-algorithmic-performance-trade-offs)
+* [4. Algorithmic Performance Trade-offs](#4-algorithmic-performance-trade-offs)
+* [5. Future Work](#5-future-work)
 
 ## Project Overview
 
@@ -32,6 +32,7 @@ This project evolved through several modifications to arrive current control arc
 * **Kinematic Upgrade (3-DOF to 4-DOF):** The manipulator was upgraded from 3 to 4 degrees of freedom. This added kinematic redundancy allows the arm to maintain a positional lock on the target while simultaneously contorting its internal posture to dodge obstacles.
 * **Dynamic Environments:** The project transitioned from using stationary obstacle to dynamic obstacle. This necessitated the shift to real-time Nonlinear Model Predictive Control (NMPC) to proactively predict and recalculate safe trajectories on the fly.
 * **Hierarchical Autonomy (RRT Integration):** Integrated a high-level 3D Cartesian RRT* planner above the NMPC. While the local NMPC excels at split-second dynamic dodging over short preview horizons, the global RRT* resolves long-range geometric decision-making, preventing the local optimizer from getting trapped in structural local minima.
+* **Event-Triggered Replanning:** Because the obstacle is dynamic, the initial global route can become blocked. To solve this, the RRT* planner is no longer restricted to initialization; it is dynamically re-triggered whenever the NMPC detects a stall.
 
 <img width="751" height="626" alt="Animation" src="https://github.com/user-attachments/assets/c48e2b02-8a60-46db-8d11-46ad8244e542" />
 
@@ -54,16 +55,24 @@ $$\text{Trajectory Window}_t = \begin{bmatrix} p_{ref, t} & p_{ref, t+1} & \dots
 
 ## 2. Nonlinear Model Predictive Controller (NMPC)
 ### Why NMPC over Standard MPC?
-1. Non-Linear KinematicsStandard MPC relies on Quadratic Programming (QP) solvers, which mathematically demand strictly linear system dynamics (e.g., $x_{k+1} = Ax_k + Bu_k$). However, mapping the 4-DOF joint space ($q$) to the Cartesian workspace ($x, y, z$) requires Forward Kinematics heavily reliant on non-linear trigonometric transformations ($\sin$, $\cos$). Linearizing these dynamics via Jacobians across a wide operational workspace introduces massive approximation errors. The NMPC bypasses this flaw by evaluating the true non-linear explicit dynamics natively.
-2. Non-Convex Obstacle AvoidanceQP solvers strictly require a convex optimization landscape—a single "bowl" where gradient descent is mathematically guaranteed to find the global minimum. Introducing a physical obstacle avoidance penalty bifurcates the workspace, transforming a simple quadratic tracking problem into a highly non-convex space. If a standard QP solver were presented with this topology, it would instantly fail or permanently trap itself against the obstacle's boundary manifold. By deploying an NMPC, the system leverages CasADi's advanced IPOPT interior-point solver, which is natively capable of routing optimal trajectories around non-convex constraint manifolds.
+1. Non-Linear Kinematics
 
-### The Optimization Landscape & Hierarchical Necessity
+Standard MPC relies on Quadratic Programming (QP) solvers, which mathematically demand strictly linear system dynamics (e.g., $x_{k+1} = Ax_k + Bu_k$). However, mapping the 4-DOF joint space ($q$) to the Cartesian workspace ($x, y, z$) requires Forward Kinematics heavily reliant on non-linear trigonometric transformations ($\sin$, $\cos$). Linearizing these dynamics via Jacobians across a wide operational workspace introduces massive approximation errors. The NMPC bypasses this flaw by evaluating the true non-linear explicit dynamics natively.
+
+2. Non-Convex Obstacle Avoidance
+
+QP solvers strictly require a convex optimization landscape—a single "bowl" where gradient descent is mathematically guaranteed to find the global minimum. Introducing a physical obstacle avoidance penalty bifurcates the workspace, transforming a simple quadratic tracking problem into a highly non-convex space. If a standard QP solver were presented with this topology, it would instantly fail or permanently trap itself against the obstacle's boundary manifold. By deploying an NMPC, the system leverages CasADi's advanced IPOPT interior-point solver, which is natively capable of routing optimal trajectories around non-convex constraint manifolds.
+
+3. The Optimization Landscape
+
 While the complete optimization balances multiple objectives, the core geometric landscape is dominated by a "tug-of-war" between Trajectory Tracking and Obstacle Avoidance. The simplified landscape is evaluated as:
 $$J = \sum_{k=0}^{N-1} \left( W_{track} \Vert{} p_{end\_effector, k} - p_{ref, k} \Vert{}_2^2 + W_{obs} \cdot s_k \right)$$
 
 As visualized in the landscape plot below, the obstacle creates a massive penalty spike. This visualization also explicitly justifies our Hierarchical Stack (RRT + NMPC)*:
-* The Myopic Trap (Orange): Because the NMPC only predicts 0.4 seconds into the future, a flat architecture drives straight into the "valley" behind the obstacle, trapping the arm in a local minimum stall.
+* The Myopic Trap (Yellow): Because the NMPC only predicts 0.4 seconds into the future, a flat architecture drives straight into the "valley" behind the obstacle, trapping the arm in a local minimum stall.
 * The Global Solution (Green): The high-level RRT* planner solves the geometric maze globally before execution, routing a pre-validated path entirely around the obstacle penalty. The NMPC simply tracks these safe waypoints.
+
+ ![Trajectory with only NMPC](figure/optimization_landscape.png)
 
 ### System Dynamics
 The NMPC predicts the future states of the arm over a horizon $N$ using Explicit Euler integration. Let the state vector be $x = [q, \dot{q}]^T \in \mathbb{R}^8$ and the control input be joint accelerations $u = \ddot{q} \in \mathbb{R}^4$. The system dynamics are defined as:
@@ -83,13 +92,8 @@ Where the individual running costs are defined as:
 
 Algorithmic Nuances:
 
-Dynamic Weight Scheduling (Null-Space Exploitation): When the arm is traveling, $W_{track}$ is relatively low ($500$). However, once the target is reached, $W_{track}$ dynamically scales up to $500,000$. If the obstacle swings toward the stationary arm, this extreme penalty prevents the end-effector from drifting. It mathematically forces the NMPC to resolve the collision strictly within the 4-DOF null-space—contorting the intermediate joints away from the obstacle while maintaining a strict lock on the target coordinate.
 * Velocity Damping: The velocity effort penalty acts as an artificial damping system, forcing the arm to slow down gracefully as it approaches the reference points to prevent momentum overshoot.
 * Terminal Cost: Because the NMPC predicts a finite 0.4s window, the solver is inherently "short-sighted." A heavy terminal cost ($J_{terminal}$) prevents aimless drifting by heavily penalizing the final state error at the end of the horizon window.
-
- ![Trajectory with only NMPC](figure/optimization_landscape.png)
-
-This 3D surface plot visualizes the total cost function ($J$) mapped across the robot's physical workspace. The smooth, sloping "bowl" represents the target-tracking cost, which naturally pulls the arm toward the global minimum (the green target). However, the central obstacle introduces a massive penalty spike, transforming the landscape into a highly non-convex space.
 
 ## 3. Low-Level Estimation: Unscented Kalman Filter (UKF)
 
@@ -141,19 +145,23 @@ $$
 (x_{node} - x_{obs})^2 + (y_{node} - y_{obs})^2 + s_k \geq r_{safe}^2
 $$
 
-# 4. Other design parameters
-
-To ensure this controller is viable for physical hardware deployment, specific algorithmic trade-offs were made to prioritize **real-time execution (50Hz)**:
-
-* **Explicit Euler Dynamics:** Explicit Euler integration was chosen over higher-order solvers like Runge-Kutta 4 (RK4). While RK4 offers superior prediction accuracy, Explicit Euler guarantees a strict sub-20ms solve time, which is critical for closing the control loop in real-time.
-* **Predictive Horizon ($N=20$):** At a timestep of $\Delta t = 0.02s$, a 20-step horizon yields a 0.4-second predictive window. This provides just enough spatial awareness for the IPOPT solver to dodge dynamic obstacles without causing computational bottlenecks.
-* **Solve Time Performance:** The CasADi IPOPT solver successfully completes the 20-step non-linear horizon in approximately 10-15 milliseconds on an average CPU, running comfortably within the 20ms allowance required for stable 50Hz control.
-
-# 5. Algorithmic Performance Trade-offs
+# 4. Algorithmic Performance Trade-offs
 
 To guarantee stable and safe real-time execution (50Hz control loop), specific design boundaries were maintained:  Explicit Euler Integration: Selected over higher-order numerical methods like RK4. 
 * Explicit Euler integration guarantees a strict sub-20ms execution overhead per optimization loop, maintaining deterministic execution intervals.  
 * Predictive Horizon Choice ($N=20, \Delta t = 0.02s$): Results in a 0.4-second predictive preview window. This offers sufficient spatial awareness to execute local reactive avoidance maneuvers without introducing computational bottlenecks into the loop.  
 * Solve-Time Profile: The CasADi solver completes the 20-step non-linear optimization problem within approximately 10-15 milliseconds on a single standard CPU thread, operating comfortably within the 20ms timing window required for stable execution. 
 
-```
+# 5. Future Work
+
+While the current architecture successfully utilizes a stall-triggered planner to escape unexpected local minima, it is still fundamentally a reactive system. To bridge the gap toward highly reliable autonomy and proactive decision-making under severe uncertainty, future iterations will focus on:
+
+Asynchronous Dual-Threaded Replanning: Decoupling the planner and controller into parallel threads. The NMPC will maintain strict 50Hz physical safety execution, while algorithms like Real-Time RRT* (RT-RRT*) continuously re-evaluate the global workspace at ~1Hz in the background. This allows the system to proactively hot-swap the reference trajectory before a stall event is ever triggered.
+
+Dynamic Obstacle Trajectory Prediction: Enhancing the NMPC constraints by predicting the future kinematic trajectory of the dynamic obstacle across the predictive horizon, rather than solely reacting to its instantaneous Cartesian coordinate.
+
+Active Perception & Sensor Fusion: Leveraging the existing Unscented Kalman Filter (UKF) architecture to fuse raw encoder data with Cartesian camera inputs, specifically addressing non-linear measurements and handling visual occlusions in real time.
+
+Learning-Based Heuristics (GPAI): Augmenting or replacing the computationally expensive geometric RRT* search with General Purpose AI models capable of instantly predicting safe topological routes based on generalized environmental data.
+
+----

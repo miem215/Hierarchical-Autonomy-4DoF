@@ -29,6 +29,10 @@ class NMPCController:
         self.opti.set_initial(slack, 0.1) 
         
         W_obs = 100000.0  
+        
+   
+       
+        
         q_home = ca.vertcat(0.0, 0.0, 0.0, 0.0)
 
         # --- 1. THE RUNNING COST & CONSTRAINTS (The Journey) ---
@@ -37,7 +41,7 @@ class NMPCController:
             
             # UPGRADE POINT: Track the time-indexed path from RRT* instead of static goal
             ref_pos_k = target_trajectory[k, :]
-            cost += ca.sumsqr(ee_pos - ref_pos_k) * 500.0
+            cost += ca.sumsqr(ee_pos - ref_pos_k) * 500
             
             cost += ca.sumsqr(U[:, k]) * 0.2
             cost += W_obs * slack[k]
